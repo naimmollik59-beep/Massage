@@ -335,7 +335,6 @@
     <div class="messages-area" id="messagesArea"></div>
 
     <div class="input-bar-container">
-      <!-- Active Reply Reference Banner -->
       <div class="active-reply-banner" id="activeReplyBanner">
         <span id="replyBannerText">Replying to message...</span>
         <span style="cursor:pointer;" onclick="cancelReply()">✕</span>
@@ -367,18 +366,34 @@
     let pendingFile = null;
 
     window.addEventListener('DOMContentLoaded', () => {
-      roomId = window.location.hash.replace('#', '');
-      if (!roomId) {
+      // Check local storage or URL hash to preserve Host Role across refreshes
+      const savedHostRoom = localStorage.getItem('p2p_host_room_id');
+      const hashRoom = window.location.hash.replace('#', '');
+
+      if (savedHostRoom && (!hashRoom || hashRoom === savedHostRoom)) {
+        // Recover Host Role on refresh
+        isHost = true;
+        roomId = savedHostRoom;
+        window.location.hash = roomId;
+        document.getElementById('apiKeyContainer').style.display = 'flex';
+        document.getElementById('apiKeyInput').value = localStorage.getItem('p2p_host_api_key') || '';
+        document.getElementById('modalTitle').innerText = 'Rejoin Your Room (Host)';
+      } else if (!hashRoom) {
+        // New Host Setup
         isHost = true;
         document.getElementById('apiKeyContainer').style.display = 'flex';
-        document.getElementById('clearChatBtn').style.display = 'inline-block';
         document.getElementById('modalTitle').innerText = 'Create Group Room (Host)';
       } else {
+        // Participant Setup
         isHost = false;
+        roomId = hashRoom;
         document.getElementById('apiKeyContainer').style.display = 'none';
-        document.getElementById('clearChatBtn').style.display = 'none';
         document.getElementById('modalTitle').innerText = 'Join Group Room';
       }
+
+      // Pre-fill saved username if available
+      const savedName = localStorage.getItem('p2p_username');
+      if (savedName) document.getElementById('usernameInput').value = savedName;
     });
 
     function initializeUser() {
@@ -386,20 +401,24 @@
       if (!name) return alert('Please enter a display name');
 
       localUser.name = name;
+      localStorage.setItem('p2p_username', name);
+
       localUser.avatar = document.getElementById('avatarInput').value.trim() || `https://api.dicebear.com/7.x/bottts/svg?seed=${name}`;
       
       if (isHost) {
         localUser.apiKey = document.getElementById('apiKeyInput').value.trim();
+        if (!roomId) roomId = 'room-' + Math.random().toString(36).substring(2, 9);
+        
+        // Save host persistence state in browser
+        localStorage.setItem('p2p_host_room_id', roomId);
+        localStorage.setItem('p2p_host_api_key', localUser.apiKey);
+        window.location.hash = roomId;
+
+        document.getElementById('clearChatBtn').style.display = 'inline-block';
       }
 
       document.getElementById('setupModal').style.display = 'none';
-
-      if (isHost) {
-        roomId = 'room-' + Math.random().toString(36).substring(2, 9);
-        window.location.hash = roomId;
-      }
-
-      document.getElementById('roomTitle').innerText = isHost ? `Room Host ID: ${roomId}` : `Connected to Room`;
+      document.getElementById('roomTitle').innerText = isHost ? `Host ID: ${roomId}` : `Connected to Room`;
 
       initPeerJS();
 
@@ -416,7 +435,7 @@
         if (!isHost) {
           connectToHost();
         } else {
-          appendSystemMessage(`Room created. Share the link for others to join!`);
+          appendSystemMessage(`Room active. Share the link to invite participants!`);
         }
       });
 
@@ -433,7 +452,6 @@
     function connectToHost() {
       hostConn = peer.connect(roomId);
       hostConn.on('open', () => {
-        appendSystemMessage('Connected to group chat!');
         hostConn.send({ type: 'join', user: localUser });
       });
       hostConn.on('data', (data) => handleIncomingData(data));
@@ -449,14 +467,24 @@
 
     function handleIncomingData(data, senderConn) {
       if (data.type === 'join' && isHost) {
-        // Automatically sync chat history to newly joined participant
+        // 1. Send full chat history directly to the new joiner
         senderConn.send({ type: 'history_sync', history: chatLogs });
+
+        // 2. Announce join message to all current participants
+        const joinNotice = `👋 ${data.user.name} joined the conversation.`;
+        appendSystemMessage(joinNotice);
+        broadcast({ type: 'system_notice', text: joinNotice });
+
       } else if (data.type === 'history_sync') {
-        // Replace current view with full synchronized history from host
+        // Load and display full past chat history directly
         chatLogs = data.history || [];
         document.getElementById('messagesArea').innerHTML = '';
         chatLogs.forEach(msg => renderMessage(msg));
-        appendSystemMessage("Synced chat history.");
+        appendSystemMessage("Joined room & loaded full chat history.");
+
+      } else if (data.type === 'system_notice') {
+        appendSystemMessage(data.text);
+
       } else if (data.type === 'chat') {
         renderMessage(data.msg);
         chatLogs.push(data.msg);
@@ -467,6 +495,7 @@
           });
           checkAndTriggerAI(data.msg);
         }
+
       } else if (data.type === 'reaction') {
         applyReactionUI(data.msgId, data.emoji, data.senderName);
         if (isHost) {
@@ -474,6 +503,7 @@
             if (conn !== senderConn) conn.send(data);
           });
         }
+
       } else if (data.type === 'clear_chat') {
         chatLogs = [];
         document.getElementById('messagesArea').innerHTML = '';
@@ -728,7 +758,6 @@
     function sendReaction(msgId, emoji) {
       applyReactionUI(msgId, emoji, localUser.name);
       
-      // Update reaction state in chatLogs array for syncing
       const msgObj = chatLogs.find(m => m.id === msgId);
       if (msgObj) {
         if (!msgObj.reactions) msgObj.reactions = [];
@@ -809,7 +838,6 @@
 
       container.appendChild(item);
 
-      // Render any synced reactions from initial history
       if (msg.reactions && msg.reactions.length > 0) {
         msg.reactions.forEach(r => applyReactionUI(msg.id, r.emoji, r.senderName));
       }
