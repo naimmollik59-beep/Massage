@@ -86,8 +86,23 @@
       align-items: center;
     }
 
+    .header-btn-group {
+      display: flex;
+      gap: 8px;
+    }
+
     .room-link-btn {
       background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .clear-chat-btn {
+      background: #ef4444;
       color: #fff;
       border: none;
       padding: 6px 12px;
@@ -185,6 +200,7 @@
       display: flex;
       gap: 4px;
       margin-top: 4px;
+      flex-wrap: wrap;
     }
 
     .reaction-pill {
@@ -310,7 +326,10 @@
       <div>
         <strong id="roomTitle">Initializing...</strong>
       </div>
-      <button class="room-link-btn" onclick="copyShareLink()">Copy Invite Link</button>
+      <div class="header-btn-group">
+        <button class="clear-chat-btn" id="clearChatBtn" style="display: none;" onclick="hostClearChat()">Clear Chat</button>
+        <button class="room-link-btn" onclick="copyShareLink()">Copy Invite Link</button>
+      </div>
     </div>
 
     <div class="messages-area" id="messagesArea"></div>
@@ -340,22 +359,24 @@
     let hostConn = null;
     let isHost = false;
     let roomId = '';
-    const chatLogs = [];
+    let chatLogs = [];
 
     let activeModel = null;
     let isSelectingModel = false;
     let selectedReplyMsg = null;
-    let pendingFile = null; // { base64, type, mimeType }
+    let pendingFile = null;
 
     window.addEventListener('DOMContentLoaded', () => {
       roomId = window.location.hash.replace('#', '');
       if (!roomId) {
         isHost = true;
         document.getElementById('apiKeyContainer').style.display = 'flex';
+        document.getElementById('clearChatBtn').style.display = 'inline-block';
         document.getElementById('modalTitle').innerText = 'Create Group Room (Host)';
       } else {
         isHost = false;
         document.getElementById('apiKeyContainer').style.display = 'none';
+        document.getElementById('clearChatBtn').style.display = 'none';
         document.getElementById('modalTitle').innerText = 'Join Group Room';
       }
     });
@@ -401,6 +422,7 @@
 
       peer.on('connection', (conn) => {
         connections.push(conn);
+        
         conn.on('data', (data) => handleIncomingData(data, conn));
         conn.on('close', () => {
           connections = connections.filter(c => c !== conn);
@@ -426,7 +448,16 @@
     }
 
     function handleIncomingData(data, senderConn) {
-      if (data.type === 'chat') {
+      if (data.type === 'join' && isHost) {
+        // Automatically sync chat history to newly joined participant
+        senderConn.send({ type: 'history_sync', history: chatLogs });
+      } else if (data.type === 'history_sync') {
+        // Replace current view with full synchronized history from host
+        chatLogs = data.history || [];
+        document.getElementById('messagesArea').innerHTML = '';
+        chatLogs.forEach(msg => renderMessage(msg));
+        appendSystemMessage("Synced chat history.");
+      } else if (data.type === 'chat') {
         renderMessage(data.msg);
         chatLogs.push(data.msg);
 
@@ -443,6 +474,20 @@
             if (conn !== senderConn) conn.send(data);
           });
         }
+      } else if (data.type === 'clear_chat') {
+        chatLogs = [];
+        document.getElementById('messagesArea').innerHTML = '';
+        appendSystemMessage("The host has cleared the conversation history.");
+      }
+    }
+
+    function hostClearChat() {
+      if (!isHost) return;
+      if (confirm("Are you sure you want to clear all chat messages for everyone?")) {
+        chatLogs = [];
+        document.getElementById('messagesArea').innerHTML = '';
+        appendSystemMessage("You cleared the conversation history.");
+        broadcast({ type: 'clear_chat' });
       }
     }
 
@@ -490,7 +535,7 @@
         text: text,
         file: pendingFile ? { ...pendingFile } : null,
         replyTo: selectedReplyMsg ? { senderName: selectedReplyMsg.senderName, text: selectedReplyMsg.text, isAI: selectedReplyMsg.isAI } : null,
-        reactions: {},
+        reactions: [],
         isAI: false
       };
 
@@ -521,7 +566,6 @@
       }
     }
 
-    // Dynamic pre-verification pipeline
     async function findAndLockBestModel() {
       if (isSelectingModel) return;
       isSelectingModel = true;
@@ -623,7 +667,7 @@
             senderName: 'Gemini (AI)',
             avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=GeminiAI',
             text: aiText,
-            reactions: {},
+            reactions: [],
             isAI: true
           };
 
@@ -640,7 +684,6 @@
       }
     }
 
-    // Image Generation (/gc)
     async function triggerImagenGen(promptText) {
       if (!localUser.apiKey) {
         appendSystemMessage("⚠️ API Key required for image generation.");
@@ -667,7 +710,7 @@
             avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=GeminiAI',
             text: `Generated image for: "${promptText}"`,
             file: { type: 'image', url: imgBase64 },
-            reactions: {},
+            reactions: [],
             isAI: true
           };
 
@@ -682,9 +725,16 @@
       }
     }
 
-    // Reaction Handling
     function sendReaction(msgId, emoji) {
       applyReactionUI(msgId, emoji, localUser.name);
+      
+      // Update reaction state in chatLogs array for syncing
+      const msgObj = chatLogs.find(m => m.id === msgId);
+      if (msgObj) {
+        if (!msgObj.reactions) msgObj.reactions = [];
+        msgObj.reactions.push({ emoji, senderName: localUser.name });
+      }
+
       broadcast({ type: 'reaction', msgId: msgId, emoji: emoji, senderName: localUser.name });
     }
 
@@ -712,7 +762,6 @@
       }
     }
 
-    // UI Rendering
     function renderMessage(msg) {
       const container = document.getElementById('messagesArea');
       const isSelf = msg.senderId === localUser.id;
@@ -759,6 +808,12 @@
       `;
 
       container.appendChild(item);
+
+      // Render any synced reactions from initial history
+      if (msg.reactions && msg.reactions.length > 0) {
+        msg.reactions.forEach(r => applyReactionUI(msg.id, r.emoji, r.senderName));
+      }
+
       container.scrollTop = container.scrollHeight;
     }
 
