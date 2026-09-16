@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>P2P Full Messenger with Gemini AI</title>
+  <!-- PeerJS Library for P2P Networking -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    body {
+      background-color: #0f172a;
+      color: #f8fafc;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    /* Modal Setup Screen */
+    .setup-modal {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.95);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    .setup-card {
+      background: #1e293b;
+      padding: 24px;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 400px;
+      border: 1px solid #334155;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .setup-card h2 { color: #38bdf8; text-align: center; }
+    
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .input-group label { font-size: 0.85rem; color: #94a3b8; }
+    
+    input[type="text"], input[type="password"] {
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #fff;
+    }
+
+    /* Main Chat Layout */
+    .chat-app {
+      width: 100%;
+      max-width: 800px;
+      height: 95vh;
+      background: #1e293b;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #334155;
+      overflow: hidden;
+    }
+
+    .chat-header {
+      padding: 16px;
+      background: #0f172a;
+      border-bottom: 1px solid #334155;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .room-link-btn {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .messages-area {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .message-item {
+      display: flex;
+      gap: 10px;
+      max-width: 85%;
+      align-items: flex-start;
+      position: relative;
+    }
+
+    .message-item.self {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #334155;
+      object-fit: cover;
+    }
+
+    .message-body {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    .bubble {
+      background: #334155;
+      padding: 10px 14px;
+      border-radius: 12px;
+      line-height: 1.4;
+      font-size: 0.95rem;
+      word-break: break-word;
+    }
+
+    .message-item.self .bubble { background: #0284c7; }
+    .message-item.ai .bubble { background: #0d9488; }
+
+    .reply-preview-badge {
+      background: #0f172a;
+      border-left: 3px solid #38bdf8;
+      padding: 4px 8px;
+      font-size: 0.75rem;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      color: #94a3b8;
+    }
+
+    .media-attachment img {
+      max-width: 240px;
+      border-radius: 8px;
+      margin-top: 6px;
+      display: block;
+    }
+
+    .media-attachment audio {
+      margin-top: 6px;
+      max-width: 240px;
+    }
+
+    /* Actions & Reactions */
+    .msg-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+      font-size: 0.75rem;
+    }
+
+    .action-btn {
+      color: #64748b;
+      cursor: pointer;
+      user-select: none;
+    }
+    .action-btn:hover { color: #38bdf8; }
+
+    .reactions-bar {
+      display: flex;
+      gap: 4px;
+      margin-top: 4px;
+    }
+
+    .reaction-pill {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 2px 6px;
+      font-size: 0.75rem;
+    }
+
+    .reaction-picker {
+      display: none;
+      position: absolute;
+      bottom: 100%;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 20px;
+      padding: 4px 8px;
+      gap: 6px;
+      z-index: 10;
+    }
+
+    .reaction-picker span {
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: transform 0.1s;
+    }
+    .reaction-picker span:hover { transform: scale(1.3); }
+
+    .sender-title {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      margin-bottom: 2px;
+      font-weight: bold;
+    }
+
+    /* Input Bar & Active Reply Bar */
+    .input-bar-container {
+      background: #0f172a;
+      border-top: 1px solid #334155;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .active-reply-banner {
+      display: none;
+      padding: 6px 16px;
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      font-size: 0.8rem;
+      color: #38bdf8;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .input-bar {
+      padding: 12px 16px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .file-btn-label {
+      background: #334155;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1.1rem;
+    }
+
+    .input-bar input[type="text"] {
+      flex: 1;
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #334155;
+      background: #1e293b;
+      color: white;
+    }
+
+    .btn-submit {
+      padding: 10px 20px;
+      background: #0284c7;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    .attachment-preview {
+      display: none;
+      padding: 4px 16px;
+      font-size: 0.75rem;
+      color: #a7f3d0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Login Modal -->
+  <div class="setup-modal" id="setupModal">
+    <div class="setup-card">
+      <h2 id="modalTitle">Join Web Messenger</h2>
+      <div class="input-group">
+        <label>Display Name</label>
+        <input type="text" id="usernameInput" placeholder="Enter your name..." />
+      </div>
+      <div class="input-group">
+        <label>Avatar URL (Optional)</label>
+        <input type="text" id="avatarInput" placeholder="https://..." />
+      </div>
+      <div class="input-group" id="apiKeyContainer" style="display: none;">
+        <label>Gemini API Key (Host Configuration)</label>
+        <input type="password" id="apiKeyInput" placeholder="Paste API Key here..." />
+      </div>
+      <button class="btn-submit" onclick="initializeUser()">Enter Room</button>
+    </div>
+  </div>
+
+  <!-- Chat App -->
+  <div class="chat-app">
+    <div class="chat-header">
+      <div>
+        <strong id="roomTitle">Initializing...</strong>
+      </div>
+      <button class="room-link-btn" onclick="copyShareLink()">Copy Invite Link</button>
+    </div>
+
+    <div class="messages-area" id="messagesArea"></div>
+
+    <div class="input-bar-container">
+      <!-- Active Reply Reference Banner -->
+      <div class="active-reply-banner" id="activeReplyBanner">
+        <span id="replyBannerText">Replying to message...</span>
+        <span style="cursor:pointer;" onclick="cancelReply()">✕</span>
+      </div>
+      
+      <div class="attachment-preview" id="attachmentPreview"></div>
+
+      <div class="input-bar">
+        <label class="file-btn-label" for="fileInput">📎</label>
+        <input type="file" id="fileInput" style="display:none;" accept="image/*,audio/*" onchange="handleFileSelect(event)" />
+        <input type="text" id="chatInput" placeholder="Type /g to ask AI, /gc to generate image..." />
+        <button class="btn-submit" onclick="sendChatMessage()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let localUser = { id: '', name: 'Guest', avatar: '', apiKey: '' };
+    let peer = null;
+    let connections = [];
+    let hostConn = null;
+    let isHost = false;
+    let roomId = '';
+    const chatLogs = [];
+
+    let activeModel = null;
+    let isSelectingModel = false;
+    let selectedReplyMsg = null;
+    let pendingFile = null; // { base64, type, mimeType }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      roomId = window.location.hash.replace('#', '');
+      if (!roomId) {
+        isHost = true;
+        document.getElementById('apiKeyContainer').style.display = 'flex';
+        document.getElementById('modalTitle').innerText = 'Create Group Room (Host)';
+      } else {
+        isHost = false;
+        document.getElementById('apiKeyContainer').style.display = 'none';
+        document.getElementById('modalTitle').innerText = 'Join Group Room';
+      }
+    });
+
+    function initializeUser() {
+      const name = document.getElementById('usernameInput').value.trim();
+      if (!name) return alert('Please enter a display name');
+
+      localUser.name = name;
+      localUser.avatar = document.getElementById('avatarInput').value.trim() || `https://api.dicebear.com/7.x/bottts/svg?seed=${name}`;
+      
+      if (isHost) {
+        localUser.apiKey = document.getElementById('apiKeyInput').value.trim();
+      }
+
+      document.getElementById('setupModal').style.display = 'none';
+
+      if (isHost) {
+        roomId = 'room-' + Math.random().toString(36).substring(2, 9);
+        window.location.hash = roomId;
+      }
+
+      document.getElementById('roomTitle').innerText = isHost ? `Room Host ID: ${roomId}` : `Connected to Room`;
+
+      initPeerJS();
+
+      if (isHost && localUser.apiKey) {
+        findAndLockBestModel();
+      }
+    }
+
+    function initPeerJS() {
+      peer = isHost ? new Peer(roomId) : new Peer();
+
+      peer.on('open', (id) => {
+        localUser.id = id;
+        if (!isHost) {
+          connectToHost();
+        } else {
+          appendSystemMessage(`Room created. Share the link for others to join!`);
+        }
+      });
+
+      peer.on('connection', (conn) => {
+        connections.push(conn);
+        conn.on('data', (data) => handleIncomingData(data, conn));
+        conn.on('close', () => {
+          connections = connections.filter(c => c !== conn);
+        });
+      });
+    }
+
+    function connectToHost() {
+      hostConn = peer.connect(roomId);
+      hostConn.on('open', () => {
+        appendSystemMessage('Connected to group chat!');
+        hostConn.send({ type: 'join', user: localUser });
+      });
+      hostConn.on('data', (data) => handleIncomingData(data));
+    }
+
+    function broadcast(data) {
+      if (isHost) {
+        connections.forEach(conn => conn.send(data));
+      } else if (hostConn) {
+        hostConn.send(data);
+      }
+    }
+
+    function handleIncomingData(data, senderConn) {
+      if (data.type === 'chat') {
+        renderMessage(data.msg);
+        chatLogs.push(data.msg);
+
+        if (isHost) {
+          connections.forEach(conn => {
+            if (conn !== senderConn) conn.send(data);
+          });
+          checkAndTriggerAI(data.msg);
+        }
+      } else if (data.type === 'reaction') {
+        applyReactionUI(data.msgId, data.emoji, data.senderName);
+        if (isHost) {
+          connections.forEach(conn => {
+            if (conn !== senderConn) conn.send(data);
+          });
+        }
+      }
+    }
+
+    function handleFileSelect(evt) {
+      const file = evt.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const base64Data = e.target.result.split(',')[1];
+        const isImage = file.type.startsWith('image/');
+        pendingFile = {
+          base64: base64Data,
+          mimeType: file.type,
+          type: isImage ? 'image' : 'audio',
+          url: e.target.result
+        };
+        document.getElementById('attachmentPreview').innerText = `Attached: ${file.name}`;
+        document.getElementById('attachmentPreview').style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function setReplyTarget(msgObj) {
+      selectedReplyMsg = msgObj;
+      document.getElementById('replyBannerText').innerText = `Replying to ${msgObj.senderName}: "${msgObj.text.slice(0, 30)}..."`;
+      document.getElementById('activeReplyBanner').style.display = 'flex';
+    }
+
+    function cancelReply() {
+      selectedReplyMsg = null;
+      document.getElementById('activeReplyBanner').style.display = 'none';
+    }
+
+    function sendChatMessage() {
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text && !pendingFile) return;
+
+      const msgObj = {
+        id: 'msg-' + Math.random().toString(36).substring(2, 9),
+        senderId: localUser.id,
+        senderName: localUser.name,
+        avatar: localUser.avatar,
+        text: text,
+        file: pendingFile ? { ...pendingFile } : null,
+        replyTo: selectedReplyMsg ? { senderName: selectedReplyMsg.senderName, text: selectedReplyMsg.text, isAI: selectedReplyMsg.isAI } : null,
+        reactions: {},
+        isAI: false
+      };
+
+      input.value = '';
+      pendingFile = null;
+      document.getElementById('attachmentPreview').style.display = 'none';
+      cancelReply();
+
+      renderMessage(msgObj);
+      chatLogs.push(msgObj);
+
+      broadcast({ type: 'chat', msg: msgObj });
+
+      if (isHost) {
+        checkAndTriggerAI(msgObj);
+      }
+    }
+
+    function checkAndTriggerAI(msgObj) {
+      const isExplicitTrigger = msgObj.text.startsWith('/g ') || msgObj.text === '/g';
+      const isImageGen = msgObj.text.startsWith('/gc ');
+      const isReplyToAI = msgObj.replyTo && msgObj.replyTo.isAI;
+
+      if (isImageGen) {
+        triggerImagenGen(msgObj.text.replace('/gc ', ''));
+      } else if (isExplicitTrigger || isReplyToAI) {
+        triggerGeminiResponse(msgObj);
+      }
+    }
+
+    // Dynamic pre-verification pipeline
+    async function findAndLockBestModel() {
+      if (isSelectingModel) return;
+      isSelectingModel = true;
+
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${localUser.apiKey}`);
+        const data = await res.json();
+        
+        let candidateList = [];
+        if (res.ok && data.models) {
+          candidateList = data.models
+            .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+            .map(m => m.name.replace('models/', ''));
+
+          candidateList.sort((a, b) => {
+            const score = (n) => (n.includes('flash') ? 3 : n.includes('pro') ? 2 : 1);
+            return score(b) - score(a);
+          });
+        } else {
+          candidateList = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+        }
+
+        for (const model of candidateList) {
+          try {
+            const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${localUser.apiKey}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }] })
+            });
+
+            if (testRes.ok) {
+              activeModel = model;
+              console.log(`[AI System] Working model locked: ${activeModel}`);
+              break;
+            }
+          } catch (e) {
+            console.warn(`Model ${model} ping failed, trying next...`);
+          }
+        }
+      } catch (err) {
+        console.error('Model selection error:', err);
+      } finally {
+        isSelectingModel = false;
+      }
+    }
+
+    async function triggerGeminiResponse(triggerMsg) {
+      if (!localUser.apiKey) {
+        appendSystemMessage("⚠️ AI trigger detected, but no API Key was configured by the Host.");
+        return;
+      }
+
+      if (!activeModel) {
+        await findAndLockBestModel();
+        if (!activeModel) {
+          appendSystemMessage("⚠️ AI Error: No valid Gemini model reached.");
+          return;
+        }
+      }
+
+      const transcript = chatLogs.map(m => `${m.senderName}: ${m.text}`).join('\n');
+      let queryText = triggerMsg.text.replace('/g ', '').replace('/g', '');
+
+      const parts = [{
+        text: `Here is the full conversation transcript so far:\n\n${transcript}\n\nThe user ${triggerMsg.senderName} sent this latest message asking for a response: "${queryText}". Answer naturally and directly as Gemini.`
+      }];
+
+      if (triggerMsg.file) {
+        parts.push({
+          inline_data: {
+            mime_type: triggerMsg.file.mimeType,
+            data: triggerMsg.file.base64
+          }
+        });
+      }
+
+      const requestBody = {
+        contents: [{ role: 'user', parts: parts }],
+        systemInstruction: {
+          parts: [{ text: "You are an active participant named Gemini in a group chat. Speak naturally like a human participant without prefixes." }]
+        }
+      };
+
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${localUser.apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+
+        const resData = await res.json();
+
+        if (res.ok && resData.candidates && resData.candidates[0]?.content?.parts[0]?.text) {
+          const aiText = resData.candidates[0].content.parts[0].text;
+
+          const aiMsgObj = {
+            id: 'msg-' + Math.random().toString(36).substring(2, 9),
+            senderId: 'gemini-ai',
+            senderName: 'Gemini (AI)',
+            avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=GeminiAI',
+            text: aiText,
+            reactions: {},
+            isAI: true
+          };
+
+          renderMessage(aiMsgObj);
+          chatLogs.push(aiMsgObj);
+          broadcast({ type: 'chat', msg: aiMsgObj });
+        } else {
+          throw new Error(resData.error?.message || 'Model request failed');
+        }
+      } catch (err) {
+        activeModel = null;
+        await findAndLockBestModel();
+        if (activeModel) triggerGeminiResponse(triggerMsg);
+      }
+    }
+
+    // Image Generation (/gc)
+    async function triggerImagenGen(promptText) {
+      if (!localUser.apiKey) {
+        appendSystemMessage("⚠️ API Key required for image generation.");
+        return;
+      }
+
+      appendSystemMessage(`🎨 Gemini is generating image: "${promptText}"...`);
+
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${localUser.apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instances: [{ prompt: promptText }], parameters: { sampleCount: 1 } })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.predictions && data.predictions[0]?.bytesBase64Encoded) {
+          const imgBase64 = `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`;
+          
+          const aiMsgObj = {
+            id: 'msg-' + Math.random().toString(36).substring(2, 9),
+            senderId: 'gemini-ai',
+            senderName: 'Gemini (AI)',
+            avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=GeminiAI',
+            text: `Generated image for: "${promptText}"`,
+            file: { type: 'image', url: imgBase64 },
+            reactions: {},
+            isAI: true
+          };
+
+          renderMessage(aiMsgObj);
+          chatLogs.push(aiMsgObj);
+          broadcast({ type: 'chat', msg: aiMsgObj });
+        } else {
+          appendSystemMessage(`⚠️ Image generation error: ${data.error?.message || 'Failed to generate'}`);
+        }
+      } catch (e) {
+        appendSystemMessage(`⚠️ Image Gen Exception: ${e.message}`);
+      }
+    }
+
+    // Reaction Handling
+    function sendReaction(msgId, emoji) {
+      applyReactionUI(msgId, emoji, localUser.name);
+      broadcast({ type: 'reaction', msgId: msgId, emoji: emoji, senderName: localUser.name });
+    }
+
+    function applyReactionUI(msgId, emoji, senderName) {
+      const msgElem = document.getElementById(msgId);
+      if (!msgElem) return;
+
+      let rBar = msgElem.querySelector('.reactions-bar');
+      if (!rBar) {
+        rBar = document.createElement('div');
+        rBar.className = 'reactions-bar';
+        msgElem.querySelector('.message-body').appendChild(rBar);
+      }
+
+      const pill = document.createElement('span');
+      pill.className = 'reaction-pill';
+      pill.innerText = `${emoji} ${senderName}`;
+      rBar.appendChild(pill);
+    }
+
+    function togglePicker(msgId) {
+      const picker = document.getElementById(`picker-${msgId}`);
+      if (picker) {
+        picker.style.display = picker.style.display === 'flex' ? 'none' : 'flex';
+      }
+    }
+
+    // UI Rendering
+    function renderMessage(msg) {
+      const container = document.getElementById('messagesArea');
+      const isSelf = msg.senderId === localUser.id;
+
+      const item = document.createElement('div');
+      item.className = `message-item ${isSelf ? 'self' : ''} ${msg.isAI ? 'ai' : ''}`;
+      item.id = msg.id;
+
+      let fileHTML = '';
+      if (msg.file) {
+        if (msg.file.type === 'image') {
+          fileHTML = `<div class="media-attachment"><img src="${msg.file.url}" /></div>`;
+        } else if (msg.file.type === 'audio') {
+          fileHTML = `<div class="media-attachment"><audio controls src="${msg.file.url}"></audio></div>`;
+        }
+      }
+
+      let replyHTML = '';
+      if (msg.replyTo) {
+        replyHTML = `<div class="reply-preview-badge">↩ Replying to ${msg.replyTo.senderName}: ${escapeHtml(msg.replyTo.text.slice(0, 35))}</div>`;
+      }
+
+      item.innerHTML = `
+        <img class="avatar" src="${msg.avatar}" alt="avatar" />
+        <div class="message-body">
+          <div class="reaction-picker" id="picker-${msg.id}">
+            <span onclick="sendReaction('${msg.id}', '👍'); togglePicker('${msg.id}')">👍</span>
+            <span onclick="sendReaction('${msg.id}', '❤️'); togglePicker('${msg.id}')">❤️</span>
+            <span onclick="sendReaction('${msg.id}', '😂'); togglePicker('${msg.id}')">😂</span>
+            <span onclick="sendReaction('${msg.id}', '🔥'); togglePicker('${msg.id}')">🔥</span>
+            <span onclick="sendReaction('${msg.id}', '😮'); togglePicker('${msg.id}')">😮</span>
+          </div>
+
+          <div class="sender-title">${msg.senderName}</div>
+          ${replyHTML}
+          <div class="bubble">${escapeHtml(msg.text)}${fileHTML}</div>
+          
+          <div class="msg-actions">
+            <span class="action-btn" onclick="setReplyTarget(${JSON.stringify(msg).replace(/"/g, '&quot;')})">Reply</span>
+            <span class="action-btn" onclick="togglePicker('${msg.id}')">React</span>
+          </div>
+          <div class="reactions-bar"></div>
+        </div>
+      `;
+
+      container.appendChild(item);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function appendSystemMessage(text) {
+      const container = document.getElementById('messagesArea');
+      const item = document.createElement('div');
+      item.style.cssText = 'text-align: center; color: #64748b; font-size: 0.8rem; margin: 8px 0;';
+      item.innerText = text;
+      container.appendChild(item);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function copyShareLink() {
+      navigator.clipboard.writeText(window.location.href);
+      alert('Invite link copied to clipboard!');
+    }
+
+    function escapeHtml(text) {
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    document.getElementById('chatInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendChatMessage();
+    });
+  </script>
+</body>
+</html>
