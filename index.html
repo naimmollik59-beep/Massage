@@ -513,6 +513,12 @@
     let recordSeconds = 0;
     let isRecording = false;
 
+    // Connection resilience state
+    let peerInitInProgress = false;
+    let unavailableIdRetryCount = 0;
+    let reconnectRetryCount = 0;
+    let hostReconnectAttempted = false;
+
     window.addEventListener('DOMContentLoaded', () => {
       const hashRoom = window.location.hash.replace('#', '');
       const savedHostRoom = localStorage.getItem('p2p_host_room_id');
@@ -717,11 +723,24 @@
     }
 
     function initPeerJS() {
+      // Guard against creating a second live Peer instance (this was a root cause
+      // of duplicate/ghost registrations that led to 'unavailable-id' errors).
+      if (peer && !peer.destroyed) {
+        return;
+      }
+      if (peerInitInProgress) {
+        return;
+      }
+      peerInitInProgress = true;
+
       const peerConfig = {
         config: {
           iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
             { urls: 'stun:relays.100ms.live:19302' },
             {
               urls: 'turn:openrelay.metered.ca:80',
@@ -737,6 +756,11 @@
               urls: 'turn:openrelay.metered.ca:443?transport=tcp',
               username: 'openrelay',
               credential: 'openrelay'
+            },
+            {
+              urls: 'turns:openrelay.metered.ca:443?transport=tcp',
+              username: 'openrelay',
+              credential: 'openrelay'
             }
           ],
           iceCandidatePoolSize: 10
@@ -746,6 +770,9 @@
       peer = isHost ? new Peer(roomId, peerConfig) : new Peer(peerConfig);
 
       peer.on('open', (id) => {
+        peerInitInProgress = false;
+        unavailableIdRetryCount = 0;
+        reconnectRetryCount = 0;
         localUser.id = id;
         if (!isHost) {
           connectToHost();
@@ -754,8 +781,83 @@
         }
       });
 
+      // Fires when the underlying socket to the signaling server drops
+      // (very common on mobile when a tab is backgrounded/locked). Without
+      // this handler PeerJS just sits disconnected and every later action
+      // (including the host's own re-registration) can surface as
+      // 'unavailable-id' or silently fail to let anyone else connect.
+      peer.on('disconnected', () => {
+        peerInitInProgress = false;
+        appendSystemNotice(`⚠️ Lost connection to signaling server. Reconnecting...`);
+        setTimeout(() => {
+          if (peer && !peer.destroyed) {
+            try {
+              peer.reconnect();
+            } catch (e) {
+              // Reconnect can itself throw if the underlying socket is in a bad
+              // state; fall back to a full re-init in that case.
+              peer.destroy();
+              peer = null;
+              initPeerJS();
+            }
+          }
+        }, 1500);
+      });
+
+      peer.on('close', () => {
+        peerInitInProgress = false;
+        appendSystemNotice(`🔌 Peer connection closed.`);
+      });
+
       peer.on('error', (err) => {
         console.error('PeerJS Connection Error:', err);
+        peerInitInProgress = false;
+
+        if (err.type === 'unavailable-id') {
+          // The host's own room ID is still registered on the broker (e.g. a
+          // stale session from a previous tab/reconnect that hasn't expired
+          // yet). Destroy this attempt and retry shortly instead of leaving
+          // the app in a broken, unjoinable state.
+          unavailableIdRetryCount++;
+          if (unavailableIdRetryCount <= 6) {
+            appendSystemNotice(`⚠️ Room ID currently unavailable (stale session). Retrying in a moment...`);
+            if (peer) { try { peer.destroy(); } catch (e) {} }
+            peer = null;
+            setTimeout(() => { initPeerJS(); }, 3000);
+          } else {
+            appendSystemNotice(`⚠️ Could not reclaim this room ID after several attempts. Please refresh and try again, or start a new room.`);
+          }
+          return;
+        }
+
+        if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || err.type === 'socket-closed') {
+          reconnectRetryCount++;
+          appendSystemNotice(`⚠️ Connection issue (${err.type}). Attempting to reconnect...`);
+          if (peer && !peer.destroyed && reconnectRetryCount <= 10) {
+            setTimeout(() => {
+              if (peer && !peer.destroyed) peer.reconnect();
+            }, 2000);
+          } else if (reconnectRetryCount > 10) {
+            appendSystemNotice(`⚠️ Repeated connection failures. Please check your internet connection and refresh.`);
+          }
+          return;
+        }
+
+        if (err.type === 'peer-unavailable') {
+          // Happens on the joining side if the host isn't registered yet or
+          // has dropped. Retry the connection to the host instead of failing
+          // silently.
+          appendSystemNotice(`⚠️ Host not reachable yet. Retrying...`);
+          if (!isHost && !hostReconnectAttempted) {
+            hostReconnectAttempted = true;
+            setTimeout(() => {
+              hostReconnectAttempted = false;
+              connectToHost();
+            }, 3000);
+          }
+          return;
+        }
+
         appendSystemNotice(`⚠️ Peer Connection Error: ${err.type}`);
       });
 
@@ -766,12 +868,28 @@
 
     function connectToHost() {
       if (!roomId) return;
+      if (!peer || peer.destroyed) {
+        initPeerJS();
+        return;
+      }
       hostConn = peer.connect(roomId, {
         reliable: true
       });
 
       hostConn.on('open', () => {
         hostConn.send({ type: 'join', user: localUser });
+      });
+
+      hostConn.on('error', (err) => {
+        console.error('Host connection error:', err);
+        appendSystemNotice(`⚠️ Could not reach host. Retrying...`);
+        if (!hostReconnectAttempted) {
+          hostReconnectAttempted = true;
+          setTimeout(() => {
+            hostReconnectAttempted = false;
+            connectToHost();
+          }, 3000);
+        }
       });
 
       setupConnectionHandlers(hostConn);
@@ -789,6 +907,14 @@
       conn.on('close', () => {
         connections = connections.filter(c => c !== conn);
         appendSystemNotice(`🔌 A participant disconnected.`);
+
+        // If we're the non-host side and it's our connection to the host that
+        // closed, try to reconnect rather than being permanently stranded.
+        if (!isHost && conn === hostConn) {
+          setTimeout(() => {
+            if (peer && !peer.destroyed) connectToHost();
+          }, 2000);
+        }
       });
 
       conn.on('error', (err) => {
@@ -1247,6 +1373,32 @@
 
     document.getElementById('chatInput').addEventListener('keypress', (e) => {
       if (e.key === 'Enter') sendChatMessage();
+    });
+
+    // If the tab goes to background and PeerJS's socket dies quietly (common
+    // on mobile browsers), proactively try to reconnect once it's visible
+    // again instead of waiting for a user action to surface the problem.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && peer) {
+        if (peer.disconnected && !peer.destroyed) {
+          appendSystemNotice('🔄 Back online, restoring connection...');
+          try {
+            peer.reconnect();
+          } catch (e) {
+            peer.destroy();
+            peer = null;
+            initPeerJS();
+          }
+        } else if (peer.destroyed) {
+          initPeerJS();
+        }
+
+        // If we're a guest and our host connection dropped while backgrounded,
+        // re-establish it.
+        if (!isHost && (!hostConn || !hostConn.open)) {
+          setTimeout(() => connectToHost(), 1000);
+        }
+      }
     });
   </script>
 </body>
